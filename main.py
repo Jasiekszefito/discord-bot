@@ -1,50 +1,47 @@
-import discord
-from discord import app_commands
-from discord.ext import commands
 import os
-from dotenv import load_dotenv
-from flask import Flask
-from threading import Thread
+import asyncio
 from datetime import datetime, timedelta
 
-load_dotenv()
+import discord
+from discord.ext import commands, tasks
+from discord import app_commands
+from dotenv import load_dotenv
 
-# ------------------- ZMIENNE ŚRODOWISKOWE -------------------
+# ====== ENV ======
+load_dotenv()
 TOKEN = os.getenv("DISCORD_TOKEN")
 GUILD_ID = int(os.getenv("GUILD_ID", 0))
-LEGIT_CHANNEL_ID = int(os.getenv("LEGIT_CHANNEL_ID", 0))
 OFFER_CHANNEL_ID = int(os.getenv("OFFER_CHANNEL_ID", 0))
 OFERTA = os.getenv("OFERTA", "")
 
-# ------------------- KEEP ALIVE -------------------
-app = Flask('')
-
-@app.route('/')
-def home():
-    return "Bot działa!"
-
-def run():
-    app.run(host='0.0.0.0', port=8080)
-
-def keep_alive():
-    t = Thread(target=run)
-    t.start()
-
-keep_alive()
-
-# ------------------- BOT -------------------
+# ====== BOT ======
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-ticket_owners = {}
-ticket_data = {}
+# ====== STANY ======
+ticket_owners = {}  # channel_id -> user_id
+ticket_data = {}    # channel_id -> {dane ticketu}
+promo_tasks = {}    # message_id -> asyncio.Task
 
-# ------------------- MODALE I VIEW -------------------
+# ====== KLASY UI ======
+class CloseTicketView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="❌ Zamknij ticket", style=discord.ButtonStyle.red)
+    async def close_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message(
+            "🔒 Ticket zamknięty. Kanał zostanie usunięty za 5s",
+            ephemeral=True
+        )
+        await asyncio.sleep(5)
+        await interaction.channel.delete()
+
 class TicketModal(discord.ui.Modal):
-    def __init__(self, user, category):
+    def __init__(self, user: discord.Member, category: str):
         super().__init__(title=f"Ticket: {category}")
         self.user = user
         self.category = category
@@ -73,14 +70,14 @@ class TicketModal(discord.ui.Modal):
         }
 
         channel = await guild.create_text_channel(
-            name=f"ticket-{self.user.name}",
+            name=f"ticket-{self.user.name}".replace(" ", "-")[:90],
             overwrites=overwrites
         )
 
         if self.category == "Zakup produktu":
             desc = f"{self.user.mention} chce kupić **{self.problem.value}**\nIlość: {self.amount.value}\nCena: {self.price.value}"
             ticket_data[channel.id] = {
-                "user": self.user,
+                "user": self.user.id,
                 "produkt": self.problem.value,
                 "ilosc": self.amount.value,
                 "cena": self.price.value
@@ -92,8 +89,7 @@ class TicketModal(discord.ui.Modal):
             title=f"🎟️ Ticket: {self.category}",
             description=desc,
             color=discord.Color.blurple()
-        )
-        embed.set_footer(text="Ticket by M0N3HUS8L")
+        ).set_footer(text="Ticket by M0N3HUS8L")
 
         ticket_owners[channel.id] = self.user.id
         await channel.send(embed=embed, view=CloseTicketView())
@@ -102,6 +98,7 @@ class TicketModal(discord.ui.Modal):
 class TicketCategoryView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
+
         options = [
             discord.SelectOption(label="Reklamacja", description="Złóż reklamację"),
             discord.SelectOption(label="Zakup produktu", description="Kup produkt"),
@@ -111,209 +108,130 @@ class TicketCategoryView(discord.ui.View):
             placeholder="Wybierz kategorię ticketa...",
             min_values=1,
             max_values=1,
-            options=options,
-            custom_id="ticket_select"
+            options=options
         )
-        self.add_item(self.select)
         self.select.callback = self.select_callback
+        self.add_item(self.select)
 
     async def select_callback(self, interaction: discord.Interaction):
         await interaction.response.send_modal(TicketModal(interaction.user, self.select.values[0]))
 
-class CloseTicketView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-
-    @discord.ui.button(label="❌ Zamknij ticket", style=discord.ButtonStyle.red)
-    async def close_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_message("🔒 Ticket zamknięty. Kanał zostanie usunięty za 5s", ephemeral=True)
-        await discord.utils.sleep_until(discord.utils.utcnow() + discord.utils.timedelta(seconds=5))
-        await interaction.channel.delete()
-
 class OfferSelectView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
-
         options = [
             discord.SelectOption(label="Oferta 1", description="Mentoring Standard", emoji="🎓"),
             discord.SelectOption(label="Oferta 2", description="Mentoring Plus", emoji="💼"),
-            discord.SelectOption(label="Oferta 3", description="Mentoring Premium", emoji="🚀")
+            discord.SelectOption(label="Oferta 3", description="Mentoring Premium", emoji="🚀"),
         ]
-
         self.select = discord.ui.Select(
             placeholder="Kliknij, aby zobaczyć szczegóły oferty...",
             min_values=1,
             max_values=1,
-            options=options,
-            custom_id="offer_select"
+            options=options
         )
-        self.add_item(self.select)
         self.select.callback = self.select_callback
+        self.add_item(self.select)
 
     async def select_callback(self, interaction: discord.Interaction):
         opis = {
-            "Oferta 1": (
-                "💡 **Oferta 1 – Mentoring Standard**\n"
-                "- Mentoring indywidualny\n"
-                "- 10 pytań do pomocy\n"
-                "- Cena: 50PLN\n"
-            ),
-            "Oferta 2": (
-                "💡 **Oferta 2 – Mentoring Plus**\n"
-                "- Mentoring indywidualny\n"
-                "- 20 pytań do pomocy\n"
-                "- Cena: 100PLN\n"
-            ),
-            "Oferta 3": (
-                "💡 **Oferta 3 – Premium 24/7**\n"
-                "- Mentoring premium\n"
-                "- Pomoc 24/7\n"
-                "- Cena: 200PLN\n"
-            )
+            "Oferta 1": "💡 **Oferta 1 – Mentoring Standard**\n- Mentoring indywidualny\n- 10 pytań do pomocy\n- Cena: 50 PLN",
+            "Oferta 2": "💡 **Oferta 2 – Mentoring Plus**\n- Mentoring indywidualny\n- 20 pytań do pomocy\n- Cena: 100 PLN",
+            "Oferta 3": "💡 **Oferta 3 – Premium 24/7**\n- Mentoring premium\n- Pomoc 24/7\n- Cena: 200 PLN"
         }
-
         embed = discord.Embed(
-            title=f"{self.select.values[0]}",
+            title=self.select.values[0],
             description=opis[self.select.values[0]],
             color=discord.Color.green()
         )
-
-        view = discord.ui.View(timeout=None)
-        button = discord.ui.Button(label="Kup produkt", style=discord.ButtonStyle.green)
-
-        async def button_callback(button_interaction: discord.Interaction):
-            await button_interaction.response.send_modal(
-                TicketModal(button_interaction.user, "Zakup produktu")
-            )
-
-        button.callback = button_callback
-        view.add_item(button)
-
+        view = discord.ui.View()
+        btn = discord.ui.Button(label="Kup produkt", style=discord.ButtonStyle.green)
+        async def _buy_cb(i: discord.Interaction):
+            await i.response.send_modal(TicketModal(i.user, "Zakup produktu"))
+        btn.callback = _buy_cb
+        view.add_item(btn)
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
-# ------------------- KOMENDY -------------------
+# ====== PROMO ======
+PROMO_IMAGE = "https://i.imgur.com/pRPq8YW.jpeg"
+
+async def promo_countdown_task(message: discord.Message, end_time: datetime):
+    while True:
+        remaining = (end_time - datetime.utcnow()).total_seconds()
+        if remaining <= 0:
+            embed = discord.Embed(title="🎉 Witamy!", description="❌ Promocja zakończona!", color=discord.Color.red())
+            embed.set_image(url=PROMO_IMAGE)
+            embed.set_footer(text="Dzięki za udział! 🚀")
+            await message.edit(embed=embed)
+            break
+        hours, rem = divmod(int(remaining), 3600)
+        minutes, seconds = divmod(rem, 60)
+        embed = discord.Embed(
+            title="🎉 Witamy!",
+            description=f"Jesteśmy tu, aby pomóc Ci zarobić! 💸\n\n🔥 **PROMOCJA -25% na wszystko przez 48h!** 🔥\n\n⏳ Pozostało: **{hours:02d}:{minutes:02d}:{seconds:02d}**",
+            color=discord.Color.green()
+        )
+        embed.set_image(url=PROMO_IMAGE)
+        embed.set_footer(text="Nie przegap okazji! 🚀")
+        await message.edit(embed=embed)
+        await asyncio.sleep(60)
+
+# ====== KOMENDY PREFIX ======
 @bot.command(name="regulamin")
 async def regulamin(ctx):
     embed = discord.Embed(
         title="📜 Regulamin Serwera",
-        description="Witaj na naszym serwerze! Prosimy o przestrzeganie poniższych zasad:",
+        description="Witaj na naszym serwerze! Prosimy o przestrzeganie zasad.",
         color=discord.Color.blue()
     )
-    embed.add_field(name="1️⃣ Pełna kultura", value="Szanuj innych członków serwera.", inline=False)
-    embed.add_field(name="2️⃣ Zero scamu", value="Nie oszukuj innych.", inline=False)
-    embed.add_field(name="3️⃣ Prywatność", value="Nie udostępniaj danych osobowych.", inline=False)
-    embed.add_field(name="4️⃣ Ticket Support", value="Używaj systemu ticketów.", inline=False)
-    embed.add_field(name="5️⃣ Dobre zachowanie", value="Bądź miły i baw się dobrze!", inline=False)
-    embed.set_image(url="https://i.imgur.com/pRPq8YW.jpeg")
+    embed.add_field(name="1️⃣ Pełna kultura", value="Szanuj innych.", inline=False)
+    embed.add_field(name="2️⃣ Zero scamu", value="Nie wysyłaj phishingu.", inline=False)
+    embed.add_field(name="3️⃣ Prywatność", value="Nie udostępniaj cudzych danych.", inline=False)
+    embed.add_field(name="4️⃣ Ticket Support", value="Używaj ticketów.", inline=False)
+    embed.add_field(name="5️⃣ Dobre zachowanie", value="Bądź miły i pomagaj.", inline=False)
+    embed.set_image(url=PROMO_IMAGE)
     embed.set_footer(text="Regulamin by M0N3HUS8L")
     await ctx.send(embed=embed)
 
 @bot.command(name="ticketpanel")
 async def ticketpanel(ctx):
-    embed = discord.Embed(
-        title="🎫 Kliknij Aby Stworzyć Ticketa",
-        description="Wybierz kategorię ticketa",
-        color=discord.Color.green()
-    )
-    embed.set_image(url="https://i.imgur.com/pRPq8YW.jpeg")
+    embed = discord.Embed(title="🎫 Kliknij Aby Stworzyć Ticketa", description="Wybierz kategorię ticketa", color=discord.Color.green())
+    embed.set_image(url=PROMO_IMAGE)
     await ctx.send(embed=embed, view=TicketCategoryView())
 
 @bot.command(name="oferta")
 async def oferta_prefix(ctx):
-    embed = discord.Embed(
-        title="🛒 Oferta produktów",
-        description="Kliknij w dropdown poniżej, aby wybrać ofertę:",
-        color=discord.Color.gold()
-    )
-    embed.set_image(url="https://i.imgur.com/pRPq8YW.jpeg")
+    embed = discord.Embed(title="🛒 Oferta produktów", description="Kliknij w dropdown", color=discord.Color.gold())
+    embed.set_image(url=PROMO_IMAGE)
     await ctx.send(embed=embed, view=OfferSelectView())
 
-@bot.tree.command(name="oferta", description="Sprawdź ofertę produktów")
-async def oferta(interaction: discord.Interaction):
-    embed = discord.Embed(
-        title="🛒 Oferta produktów",
-        description="Kliknij w dropdown poniżej, aby wybrać ofertę:",
-        color=discord.Color.gold()
-    )
-    await interaction.response.send_message(embed=embed, view=OfferSelectView(), ephemeral=True)
-
-# ------------------- ADMIN -------------------
-@bot.tree.command(name="przejmij", description="Przejmij ticket jako admin")
-@app_commands.checks.has_permissions(manage_channels=True)
-async def przejmij(interaction: discord.Interaction):
-    channel = interaction.channel
-    if channel.id not in ticket_owners:
-        await interaction.response.send_message("❌ To nie jest ticket.", ephemeral=True)
-        return
-    owner = interaction.guild.get_member(ticket_owners[channel.id])
-    overwrites = {
-        channel.guild.default_role: discord.PermissionOverwrite(view_channel=False),
-        owner: discord.PermissionOverwrite(view_channel=True, send_messages=True),
-        interaction.user: discord.PermissionOverwrite(view_channel=True, send_messages=True),
-        channel.guild.me: discord.PermissionOverwrite(view_channel=True)
-    }
-    await channel.edit(overwrites=overwrites)
-    await interaction.response.send_message(f"✅ Ticket przejęty przez {interaction.user.mention}")
-
-@bot.tree.command(name="wezwij", description="Wezwij właściciela ticketa")
-@app_commands.checks.has_permissions(manage_channels=True)
-async def wezwij(interaction: discord.Interaction):
-    channel = interaction.channel
-    if channel.id not in ticket_owners:
-        await interaction.response.send_message("❌ To nie jest ticket.", ephemeral=True)
-        return
-    owner = interaction.guild.get_member(ticket_owners[channel.id])
-    await channel.send(f"🔔 {owner.mention}, administracja cię wzywa!")
-    await interaction.response.send_message("✅ Właściciel wezwany", ephemeral=True)
-
-    @bot.command(name="promocja")
+@bot.command(name="promocja")
 async def promocja(ctx):
-    # czas zakończenia promocji (48h od teraz)
-    end_time = datetime.datetime.utcnow() + datetime.timedelta(hours=48)
-
+    end_time = datetime.utcnow() + timedelta(hours=48)
     embed = discord.Embed(
         title="🎉 Witamy na serwerze!",
-        description=(
-            "Jesteśmy tu, aby pomóc Ci zarobić! 💸\n\n"
-            "🔥 **PROMOCJA -25% na wszystko przez 48h!** 🔥\n\n"
-            "⏳ Oferta kończy się: **{} UTC**"
-        ).format(end_time.strftime("%Y-%m-%d %H:%M:%S")),
+        description=f"🔥 PROMOCJA -25% na wszystko przez 48h!\n⏳ Kończy się: {end_time.strftime('%Y-%m-%d %H:%M:%S')} UTC",
         color=discord.Color.green()
     )
-
-    embed.set_image(url="https://i.imgur.com/pRPq8YW.jpeg")  # <- Twoja grafika
+    embed.set_image(url=PROMO_IMAGE)
     embed.set_footer(text="Nie przegap okazji! 🚀")
-
     msg = await ctx.send(embed=embed)
+    promo_tasks[msg.id] = asyncio.create_task(promo_countdown_task(msg, end_time))
 
-    # task do aktualizacji timera
-    @tasks.loop(seconds=60)
-    async def update_timer():
-        remaining = end_time - datetime.datetime.utcnow()
-        if remaining.total_seconds() <= 0:
-            embed.description = "❌ Promocja zakończona!"
-            await msg.edit(embed=embed)
-            update_timer.stop()
-        else:
-            mins, secs = divmod(int(remaining.total_seconds()), 60)
-            hours, mins = divmod(mins, 60)
-            embed.description = (
-                "Jesteśmy tu, aby pomóc Ci zarobić! 💸\n\n"
-                "🔥 **PROMOCJA -25% na wszystko przez 48h!** 🔥\n\n"
-                f"⏳ Pozostało: **{hours:02d}:{mins:02d}:{secs:02d}**"
-            )
-            await msg.edit(embed=embed)
+# ====== SLASH ======
+@bot.tree.command(name="oferta", description="Sprawdź ofertę produktów")
+async def oferta_slash(interaction: discord.Interaction):
+    embed = discord.Embed(title="🛒 Oferta produktów", description="Kliknij w dropdown", color=discord.Color.gold())
+    await interaction.response.send_message(embed=embed, view=OfferSelectView(), ephemeral=True)
 
-    update_timer.start()
-
-# ------------------- READY -------------------
+# ====== READY ======
 @bot.event
 async def on_ready():
-    print(f"🤖 Zalogowano jako {bot.user} (ID: {bot.user.id})")
+    print(f"Bot zalogowany jako {bot.user} (ID: {bot.user.id})")
     guild = discord.Object(id=GUILD_ID)
     bot.tree.copy_global_to(guild=guild)
     await bot.tree.sync(guild=guild)
-    print("✅ Slash commands zsynchronizowane.")
+    print("Slash commands zsynchronizowane.")
 
-# ------------------- RUN -------------------
+# ====== RUN ======
 bot.run(TOKEN)
