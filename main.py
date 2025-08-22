@@ -472,6 +472,24 @@ async def wezwij(interaction: discord.Interaction):
     await channel.send(f"🔔 {owner.mention}, administracja cię wzywa!")
     await interaction.response.send_message("✅ Właściciel wezwany", ephemeral=True)
 
+from flask import Flask
+from threading import Thread
+
+app = Flask('')
+
+@app.route('/')
+def home():
+    return "Bot działa!"
+
+def run():
+    app.run(host='0.0.0.0', port=8080)
+
+def keep_alive():
+    t = Thread(target=run)
+    t.start()
+
+keep_alive()  # wywołaj przed bot.run(TOKEN)
+
 # -------------------
 # URUCHOMIENIE BOTA
 # -------------------
