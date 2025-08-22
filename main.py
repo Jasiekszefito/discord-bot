@@ -266,6 +266,46 @@ async def wezwij(interaction: discord.Interaction):
     await channel.send(f"🔔 {owner.mention}, administracja cię wzywa!")
     await interaction.response.send_message("✅ Właściciel wezwany", ephemeral=True)
 
+    @bot.command(name="promocja")
+async def promocja(ctx):
+    # czas zakończenia promocji (48h od teraz)
+    end_time = datetime.datetime.utcnow() + datetime.timedelta(hours=48)
+
+    embed = discord.Embed(
+        title="🎉 Witamy na serwerze!",
+        description=(
+            "Jesteśmy tu, aby pomóc Ci zarobić! 💸\n\n"
+            "🔥 **PROMOCJA -25% na wszystko przez 48h!** 🔥\n\n"
+            "⏳ Oferta kończy się: **{} UTC**"
+        ).format(end_time.strftime("%Y-%m-%d %H:%M:%S")),
+        color=discord.Color.green()
+    )
+
+    embed.set_image(url="https://i.imgur.com/pRPq8YW.jpeg")  # <- Twoja grafika
+    embed.set_footer(text="Nie przegap okazji! 🚀")
+
+    msg = await ctx.send(embed=embed)
+
+    # task do aktualizacji timera
+    @tasks.loop(seconds=60)
+    async def update_timer():
+        remaining = end_time - datetime.datetime.utcnow()
+        if remaining.total_seconds() <= 0:
+            embed.description = "❌ Promocja zakończona!"
+            await msg.edit(embed=embed)
+            update_timer.stop()
+        else:
+            mins, secs = divmod(int(remaining.total_seconds()), 60)
+            hours, mins = divmod(mins, 60)
+            embed.description = (
+                "Jesteśmy tu, aby pomóc Ci zarobić! 💸\n\n"
+                "🔥 **PROMOCJA -25% na wszystko przez 48h!** 🔥\n\n"
+                f"⏳ Pozostało: **{hours:02d}:{mins:02d}:{secs:02d}**"
+            )
+            await msg.edit(embed=embed)
+
+    update_timer.start()
+
 # ------------------- READY -------------------
 @bot.event
 async def on_ready():
