@@ -124,9 +124,7 @@ class OfferSelectView(discord.ui.View):
             discord.SelectOption(label="Oferta 1", description="Mentoring Standard", emoji="🎓"),
             discord.SelectOption(label="Oferta 2", description="Mentoring Plus", emoji="💼"),
             discord.SelectOption(label="Oferta 3", description="Mentoring Premium", emoji="🚀"),
-            discord.SelectOption(label="Oferta 4", description="Mentoring Free", emoji="🚀"),
         ]
-    
         self.select = discord.ui.Select(
             placeholder="Kliknij, aby zobaczyć szczegóły oferty...",
             min_values=1,
@@ -141,7 +139,6 @@ class OfferSelectView(discord.ui.View):
             "Oferta 1": "💡 **Oferta 1 – Mentoring Standard**\n- Mentoring indywidualny\n- 10 pytań do pomocy\n- Cena: 50 PLN",
             "Oferta 2": "💡 **Oferta 2 – Mentoring Plus**\n- Mentoring indywidualny\n- 20 pytań do pomocy\n- Cena: 100 PLN",
             "Oferta 3": "💡 **Oferta 3 – Premium 24/7**\n- Mentoring premium\n- Pomoc 24/7\n- Cena: 200 PLN"
-            "Oferta 4": "💡 **Oferta 4 – Darmowe metody na z4r0bek"
         }
         embed = discord.Embed(
             title=self.select.values[0],
