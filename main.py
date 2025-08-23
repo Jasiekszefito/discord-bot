@@ -1,29 +1,31 @@
 import discord
-from discord.ext import commands
-import asyncio
-import os
+from discord.ext import commands, tasks
 from discord.ui import View, Button, Select
+import os
+import asyncio
+import datetime
 
 # ====== KONFIGURACJA ======
 TOKEN = os.getenv("DISCORD_TOKEN")
 GUILD_ID = int(os.getenv("GUILD_ID", 0))
+BUMP_CHANNEL_ID = int(os.getenv("BUMP_CHANNEL_ID", 0))
+VERIFY_ROLE_ID = int(os.getenv("VERIFY_ROLE_ID", 0))
+VERIFY_CHANNEL_ID = int(os.getenv("VERIFY_CHANNEL_ID", 0))
 
-BUMP_CHANNEL_ID = int(os.getenv("BUMP_CHANNEL_ID", 0))   # kanał do bump
-VERIFY_ROLE_ID = int(os.getenv("VERIFY_ROLE_ID", 0))     # rola do weryfikacji
-VERIFY_CHANNEL_ID = int(os.getenv("VERIFY_CHANNEL_ID", 0))  # kanał do weryfikacji
-
-# ====== BOT SETUP ======
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 # ====== WERYFIKACJA ======
 class VerifyView(View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
     @discord.ui.button(label="✅ Zweryfikuj się", style=discord.ButtonStyle.success, custom_id="verify_button")
     async def verify(self, interaction: discord.Interaction, button: discord.ui.Button):
         role = interaction.guild.get_role(VERIFY_ROLE_ID)
         if role:
             await interaction.user.add_roles(role)
-            await interaction.response.send_message("✅ Zostałeś zweryfikowany! Miłej zabawy 🎉", ephemeral=True)
+            await interaction.response.send_message("✅ Zostałeś zweryfikowany!", ephemeral=True)
         else:
             await interaction.response.send_message("❌ Rola weryfikacyjna nie istnieje!", ephemeral=True)
 
@@ -84,9 +86,10 @@ class OfferSelectView(View):
         self.add_item(Select(
             placeholder="🛒 Wybierz ofertę...",
             options=[
-                discord.SelectOption(label="Produkt A", value="a"),
-                discord.SelectOption(label="Produkt B", value="b"),
-                discord.SelectOption(label="Produkt C", value="c"),
+                discord.SelectOption(label="MENTORING STANDARD", value="a"),
+                discord.SelectOption(label="MENTORING PLUS", value="b"),
+                discord.SelectOption(label="MENTORING ADVANCED", value="c"),
+                discord.SelectOption(label="MENTORING FREE", value="d"),
             ]
         ))
 
@@ -103,7 +106,6 @@ async def oferta(ctx):
 # ====== PROMOCJA 48H ======
 @bot.command(name="promocja")
 async def promocja(ctx):
-    import datetime
     end_time = datetime.datetime.utcnow() + datetime.timedelta(hours=48)
     embed = discord.Embed(
         title="🔥 PROMOCJA! 🔥",
@@ -115,24 +117,21 @@ async def promocja(ctx):
     await ctx.send(embed=embed)
 
 # ====== AUTO BUMP ======
-async def auto_bump_loop():
-    await bot.wait_until_ready()
+@tasks.loop(hours=1)
+async def auto_bump():
     channel = bot.get_channel(BUMP_CHANNEL_ID)
-    if not channel:
-        print("⚠️ Nie znaleziono kanału do bumpa.")
-        return
-    while not bot.is_closed():
-        try:
-            await channel.send("/bump")
-            print(f"✅ Wysłano /bump w {channel.name}")
-        except Exception as e:
-            print(f"❌ Błąd bumpa: {e}")
-        await asyncio.sleep(3600)  # co 1h
+    if channel:
+        await channel.send("/bump")
+        print(f"✅ Wysłano /bump w {channel.name}")
 
-# ====== START ======
+# ====== ON READY ======
 @bot.event
 async def on_ready():
     print(f"✅ Zalogowano jako {bot.user}")
-    bot.loop.create_task(auto_bump_loop())
+    # Persistent views
+    bot.add_view(TicketCategoryView())
+    bot.add_view(OfferSelectView())
+    bot.add_view(VerifyView())
+    auto_bump.start()
 
 bot.run(TOKEN)
